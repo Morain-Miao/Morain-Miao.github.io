@@ -1,0 +1,164 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta http-equiv="content-type" content="text/html; charset=utf-8">
+<meta content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=0" name="viewport">
+<meta http-equiv="X-UA-Compatible" content="IE=Edge,chrome=1">
+
+
+
+
+    <meta name="keywords" content=""/>
+
+
+
+    <meta name="description" content="环绕通知实现RedLock分布式锁一、Coding自定义注解123456789101112131415161718192021222324252627282930313233343536373839404142import java.lang.annotation.*;import java...."/>
+
+
+<meta name="Robots" content="all">
+
+
+    <title>Hexo</title>
+
+
+<link rel="icon" href="/images/favicon.ico">
+
+<link rel="stylesheet" href="/css/font-awesome.min.css">
+
+
+<link rel="stylesheet" href="/css/atom-one-dark.css">
+
+
+<link rel="stylesheet" href="/css/style.css">
+
+
+<script src="/js/highlight.min.js"></script>
+
+<meta name="generator" content="Hexo 5.2.0"></head>
+<body>
+    <div class="main-container">
+        <header class="header">
+    <div class="global-width">
+        <nav class="nav-box">
+            
+                <a class="nav-item" href="/"
+                
+                >Home</a>
+            
+                <a class="nav-item" href="/resume"
+                
+                >Resume</a>
+            
+                <a class="nav-item" href="/mood"
+                
+                   target="_blank"
+                
+                >Mood</a>
+            
+                <a class="nav-item" href="/amusement/tetris"
+                
+                   target="_blank"
+                
+                >Amusement</a>
+            
+                <a class="nav-item" href="/about"
+                
+                >About</a>
+            
+        </nav>
+    </div>
+</header>
+
+        <section class="content global-width">
+            <div class="main">
+                <article class="box post">
+    <div class="post-title align-center detail-title"></div>
+    <div class="post-meta align-center">
+        
+        <i class="fa fa-calendar"></i> <time>2020-10-05</time>
+        <span class="dotted">|</span>
+        <i class="fa fa-user"></i> 
+        
+    </div>
+
+    <div class="post-content">
+        <h1 id="环绕通知实现RedLock分布式锁"><a href="#环绕通知实现RedLock分布式锁" class="headerlink" title="环绕通知实现RedLock分布式锁"></a>环绕通知实现RedLock分布式锁</h1><h2 id="一、Coding自定义注解"><a href="#一、Coding自定义注解" class="headerlink" title="一、Coding自定义注解"></a>一、Coding自定义注解</h2><figure class="highlight java"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br><span class="line">26</span><br><span class="line">27</span><br><span class="line">28</span><br><span class="line">29</span><br><span class="line">30</span><br><span class="line">31</span><br><span class="line">32</span><br><span class="line">33</span><br><span class="line">34</span><br><span class="line">35</span><br><span class="line">36</span><br><span class="line">37</span><br><span class="line">38</span><br><span class="line">39</span><br><span class="line">40</span><br><span class="line">41</span><br><span class="line">42</span><br></pre></td><td class="code"><pre><span class="line"><span class="keyword">import</span> java.lang.annotation.*;</span><br><span class="line"><span class="keyword">import</span> java.util.concurrent.TimeUnit;</span><br><span class="line"></span><br><span class="line"><span class="comment">/**</span></span><br><span class="line"><span class="comment"> * 分布式锁注解</span></span><br><span class="line"><span class="comment"> *</span></span><br><span class="line"><span class="comment"> * 使用该锁时，对该方法执行加锁操作。</span></span><br><span class="line"><span class="comment"> * 如果和<span class="doctag">@cacheable</span>配合使用。</span></span><br><span class="line"><span class="comment"> * 如果没有执行方法，不会执行加锁操作</span></span><br><span class="line"><span class="comment"> *</span></span><br><span class="line"><span class="comment"> */</span></span><br><span class="line"><span class="meta">@Target(&#123;ElementType.METHOD&#125;)</span></span><br><span class="line"><span class="meta">@Retention(RetentionPolicy.RUNTIME)</span></span><br><span class="line"><span class="meta">@Documented</span></span><br><span class="line"><span class="meta">@Inherited</span></span><br><span class="line"><span class="keyword">public</span> <span class="meta">@interface</span> Rlock &#123;</span><br><span class="line"></span><br><span class="line">    <span class="comment">/**</span></span><br><span class="line"><span class="comment">     * 分布式锁的key</span></span><br><span class="line"><span class="comment">     */</span></span><br><span class="line">    <span class="function">String <span class="title">localKey</span><span class="params">()</span></span>;</span><br><span class="line"></span><br><span class="line">    <span class="comment">/**</span></span><br><span class="line"><span class="comment">     * 锁的等待时间</span></span><br><span class="line"><span class="comment">     * <span class="doctag">@return</span></span></span><br><span class="line"><span class="comment">     */</span></span><br><span class="line">    <span class="function"><span class="keyword">long</span> <span class="title">waitTime</span><span class="params">()</span> <span class="keyword">default</span> 1000</span>;</span><br><span class="line"></span><br><span class="line">    <span class="comment">/**</span></span><br><span class="line"><span class="comment">     * 强制解锁释放时间 默认五秒</span></span><br><span class="line"><span class="comment">     *</span></span><br><span class="line"><span class="comment">     * <span class="doctag">@return</span></span></span><br><span class="line"><span class="comment">     */</span></span><br><span class="line">    <span class="function"><span class="keyword">long</span> <span class="title">leaseTime</span><span class="params">()</span> <span class="keyword">default</span> 5*1000</span>;</span><br><span class="line"></span><br><span class="line">    <span class="comment">/**</span></span><br><span class="line"><span class="comment">     * 时间格式 默认：毫秒</span></span><br><span class="line"><span class="comment">     *</span></span><br><span class="line"><span class="comment">     * <span class="doctag">@return</span></span></span><br><span class="line"><span class="comment">     */</span></span><br><span class="line">    <span class="function">TimeUnit <span class="title">timeUnit</span><span class="params">()</span> <span class="keyword">default</span> TimeUnit.MILLISECONDS</span>;</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+
+
+
+<h2 id="二、使用AOP环绕通知来执行加锁解锁"><a href="#二、使用AOP环绕通知来执行加锁解锁" class="headerlink" title="二、使用AOP环绕通知来执行加锁解锁"></a>二、使用AOP环绕通知来执行加锁解锁</h2><figure class="highlight java"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br><span class="line">26</span><br><span class="line">27</span><br><span class="line">28</span><br><span class="line">29</span><br><span class="line">30</span><br><span class="line">31</span><br><span class="line">32</span><br><span class="line">33</span><br><span class="line">34</span><br><span class="line">35</span><br><span class="line">36</span><br><span class="line">37</span><br><span class="line">38</span><br><span class="line">39</span><br><span class="line">40</span><br><span class="line">41</span><br><span class="line">42</span><br><span class="line">43</span><br><span class="line">44</span><br><span class="line">45</span><br><span class="line">46</span><br><span class="line">47</span><br><span class="line">48</span><br><span class="line">49</span><br><span class="line">50</span><br><span class="line">51</span><br><span class="line">52</span><br><span class="line">53</span><br><span class="line">54</span><br><span class="line">55</span><br><span class="line">56</span><br><span class="line">57</span><br><span class="line">58</span><br><span class="line">59</span><br><span class="line">60</span><br><span class="line">61</span><br><span class="line">62</span><br><span class="line">63</span><br><span class="line">64</span><br><span class="line">65</span><br><span class="line">66</span><br><span class="line">67</span><br><span class="line">68</span><br><span class="line">69</span><br><span class="line">70</span><br><span class="line">71</span><br><span class="line">72</span><br><span class="line">73</span><br><span class="line">74</span><br><span class="line">75</span><br><span class="line">76</span><br><span class="line">77</span><br><span class="line">78</span><br><span class="line">79</span><br><span class="line">80</span><br><span class="line">81</span><br><span class="line">82</span><br></pre></td><td class="code"><pre><span class="line"><span class="keyword">import</span> org.aspectj.lang.ProceedingJoinPoint;</span><br><span class="line"><span class="keyword">import</span> org.aspectj.lang.annotation.Around;</span><br><span class="line"><span class="keyword">import</span> org.aspectj.lang.annotation.Aspect;</span><br><span class="line"><span class="keyword">import</span> org.aspectj.lang.annotation.Pointcut;</span><br><span class="line"><span class="keyword">import</span> org.aspectj.lang.reflect.MethodSignature;</span><br><span class="line"><span class="keyword">import</span> org.redisson.RedissonRedLock;</span><br><span class="line"><span class="keyword">import</span> org.redisson.api.RLock;</span><br><span class="line"><span class="keyword">import</span> org.redisson.api.RedissonClient;</span><br><span class="line"><span class="keyword">import</span> org.slf4j.Logger;</span><br><span class="line"><span class="keyword">import</span> org.slf4j.LoggerFactory;</span><br><span class="line"><span class="keyword">import</span> org.springframework.beans.factory.annotation.Autowired;</span><br><span class="line"><span class="keyword">import</span> org.springframework.stereotype.Component;</span><br><span class="line"></span><br><span class="line"><span class="comment">/**</span></span><br><span class="line"><span class="comment"> * <span class="doctag">@program</span>: microservice_tmgsp</span></span><br><span class="line"><span class="comment"> * <span class="doctag">@description</span>: RLock的AOP配置</span></span><br><span class="line"><span class="comment"> * <span class="doctag">@author</span>: miaoyumeng</span></span><br><span class="line"><span class="comment"> * <span class="doctag">@create</span>: 2019-08-30 09:32</span></span><br><span class="line"><span class="comment"> */</span></span><br><span class="line"><span class="meta">@Aspect</span></span><br><span class="line"><span class="meta">@Component</span></span><br><span class="line"><span class="keyword">public</span> <span class="class"><span class="keyword">class</span> <span class="title">RlockAspect</span> </span>&#123;</span><br><span class="line"></span><br><span class="line">    <span class="keyword">private</span> <span class="keyword">final</span> <span class="keyword">static</span> Logger logger = LoggerFactory.getLogger(RlockAspect.class);</span><br><span class="line"></span><br><span class="line">    <span class="meta">@Autowired</span></span><br><span class="line">    <span class="keyword">private</span> RedissonClient redissonClient;</span><br><span class="line"></span><br><span class="line">    <span class="meta">@Pointcut(&quot;@annotation(cn.com.sinosoft.ecc.sms.component.redisson.Rlock)&quot;)</span></span><br><span class="line">    <span class="function"><span class="keyword">public</span> <span class="keyword">void</span> <span class="title">RlockAspect</span><span class="params">()</span> </span>&#123;</span><br><span class="line">    &#125;</span><br><span class="line"></span><br><span class="line">    <span class="meta">@Around(&quot;RlockAspect()&quot;)</span></span><br><span class="line">    <span class="function"><span class="keyword">public</span> Object <span class="title">arround</span><span class="params">(ProceedingJoinPoint proceedingJoinPoint)</span> <span class="keyword">throws</span> Throwable </span>&#123;</span><br><span class="line">        Object object = <span class="keyword">null</span>;</span><br><span class="line">        RLock lock = <span class="keyword">null</span>;</span><br><span class="line">        Rlock rlockInfo = getRlockInfo(proceedingJoinPoint);</span><br><span class="line">        logger.info(<span class="string">&quot;lockinfo：&quot;</span> + rlockInfo);</span><br><span class="line">        lock = redissonClient.getLock(getLocalKey(proceedingJoinPoint, rlockInfo));</span><br><span class="line">        RedissonRedLock redLock = <span class="keyword">new</span> RedissonRedLock(lock);</span><br><span class="line">        logger.info(<span class="string">&quot;rlockAspect start &quot;</span>);</span><br><span class="line">        <span class="keyword">try</span> &#123;</span><br><span class="line">            <span class="keyword">if</span> (lock != <span class="keyword">null</span>) &#123;</span><br><span class="line">                <span class="keyword">boolean</span> status = redLock.tryLock(rlockInfo.waitTime(),rlockInfo.leaseTime(), rlockInfo.timeUnit());</span><br><span class="line">                <span class="keyword">if</span> (status) &#123;</span><br><span class="line">                    logger.info(<span class="string">&quot;Redisson Lock：&quot;</span>+status);</span><br><span class="line">                    object = proceedingJoinPoint.proceed();</span><br><span class="line">                &#125;</span><br><span class="line">            &#125;</span><br><span class="line">        &#125; <span class="keyword">catch</span> (Exception e) &#123;</span><br><span class="line">            logger.error(<span class="string">&quot;get RedissonLock faild error :&quot;</span> + e);</span><br><span class="line">       &#125; <span class="keyword">finally</span> &#123;</span><br><span class="line">            <span class="keyword">if</span> (lock != <span class="keyword">null</span>) &#123;</span><br><span class="line">                redLock.unlock();</span><br><span class="line">            &#125;</span><br><span class="line">        &#125;</span><br><span class="line">        <span class="keyword">return</span> object;</span><br><span class="line">    &#125;</span><br><span class="line"></span><br><span class="line">    <span class="function"><span class="keyword">public</span> Rlock <span class="title">getRlockInfo</span><span class="params">(ProceedingJoinPoint proceedingJoinPoint)</span> </span>&#123;</span><br><span class="line">        MethodSignature methodSignature = (MethodSignature) proceedingJoinPoint.getSignature();</span><br><span class="line">        <span class="keyword">return</span> methodSignature.getMethod().getAnnotation(Rlock.class);</span><br><span class="line">    &#125;</span><br><span class="line"></span><br><span class="line">    <span class="comment">/**</span></span><br><span class="line"><span class="comment">     * redis lock key 生成逻辑  这里只是简单生成，如需投入生产使用，可考虑复杂化</span></span><br><span class="line"><span class="comment">     *</span></span><br><span class="line"><span class="comment">     * <span class="doctag">@param</span> proceedingJoinPoint</span></span><br><span class="line"><span class="comment">     * <span class="doctag">@return</span></span></span><br><span class="line"><span class="comment">     */</span></span><br><span class="line">    <span class="function"><span class="keyword">public</span> String <span class="title">getLocalKey</span><span class="params">(ProceedingJoinPoint proceedingJoinPoint, Rlock rlockInfo)</span> </span>&#123;</span><br><span class="line">        StringBuilder localKey = <span class="keyword">new</span> StringBuilder(<span class="string">&quot;Rlock_&quot;</span>);</span><br><span class="line"><span class="comment">//        final Object[] args = proceedingJoinPoint.getArgs();</span></span><br><span class="line"><span class="comment">//        MethodSignature methodSignature = (MethodSignature) proceedingJoinPoint.getSignature();</span></span><br><span class="line"><span class="comment">//        String methodName = methodSignature.getMethod().getName();</span></span><br><span class="line"><span class="comment">//        localKey.append(rlockInfo.localKey()).append(methodName);</span></span><br><span class="line">        localKey.append(rlockInfo.localKey());</span><br><span class="line">        logger.info(<span class="string">&quot;produce redisson lock key=&quot;</span> + localKey.toString());</span><br><span class="line"></span><br><span class="line">        <span class="keyword">return</span> localKey.toString();</span><br><span class="line">    &#125;</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+
+
+
+<h3 id="三、使用方式"><a href="#三、使用方式" class="headerlink" title="三、使用方式"></a>三、使用方式</h3><figure class="highlight java"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br></pre></td><td class="code"><pre><span class="line"><span class="meta">@Rlock(localKey = &quot;SMS_ShortMessageTemplateConfigServiceImpl_ADD_KEY&quot;, leaseTime = 1, timeUnit = TimeUnit.MINUTES)</span></span><br><span class="line"><span class="function"><span class="keyword">public</span> <span class="keyword">boolean</span> <span class="title">add</span><span class="params">(ShortMessageTemplateConfig shortMessageTemplateConfig)</span> </span>&#123;</span><br><span class="line">    <span class="comment">//业务逻辑</span></span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+
+
+    </div>
+</article>
+            </div>
+            <div class="aside">
+    
+        <div class="box widget">
+    <div class="introduction">
+        <p><img src="/images/avatar.jpg" alt="head-sculpture" /></p>
+        <p class="name">
+            万能的苗
+        </p>
+        <p class="slogan">勇敢开始，不恋过往，        不困于今，不畏将来。</p>
+    </div>
+</div>
+    
+        
+<div class="box widget">
+    <div class="title">Recent</div>
+    <ul class="item-box">
+        
+            
+                <li><a href="/2020/10/05/%E5%88%86%E5%B8%83%E5%BC%8F%E9%94%81%E7%9A%84%E9%80%89%E5%9E%8B/">(no title)</a></li>
+            
+        
+            
+                <li><a href="/2020/10/05/%E5%9F%BA%E4%BA%8EPostgreSQL%E7%9A%84%E5%90%84%E7%A7%8D%E9%94%81/">(no title)</a></li>
+            
+        
+            
+                <li><a href="/2020/10/05/%E7%8E%AF%E7%BB%95%E9%80%9A%E7%9F%A5%E5%AE%9E%E7%8E%B0RedLock%E5%88%86%E5%B8%83%E5%BC%8F%E9%94%81/">(no title)</a></li>
+            
+        
+    </ul>
+</div>
+
+    
+        
+    
+        
+  <div class="box widget">
+    <div class="title">Archives</div>
+    <ul class="archive-list"><li class="archive-list-item"><a class="archive-list-link" href="/archives/2020/10/">2020-10</a><span class="archive-list-count">3</span></li></ul>
+  </div>
+
+    
+        
+    
+</div>
+        </section>
+        <footer class="footer">
+    <div class="global-width footer-box">
+        <div class="copyright">
+            <span>Copyright &copy; 2019</span>
+            <span class="dotted">|</span>
+            <span>Powered by <a target="_blank" rel="noopener" href="https://hexo.io/">Hexo</a></span>
+            <span class="dotted">|</span>
+            <span>Theme by <a href="javascript:">Loren</a></span>
+            <span class="dotted">|</span>
+            <span><a target="_blank" rel="noopener" href="http://www.beian.miit.gov.cn">浙ICP备18016660号-1</a></span>
+        </div>
+    </div>
+</footer>
+    </div>
+
+<script>
+    hljs.initHighlightingOnLoad();
+</script>
+</body>
+</html>

@@ -74,31 +74,188 @@
                 
     
         <article class="box post post-item">
-            <div class="post-title"><a href="/2020/09/24/hello-world/">Hello World</a></div>
+            <div class="post-title"><a href="/2020/10/05/%E5%88%86%E5%B8%83%E5%BC%8F%E9%94%81%E7%9A%84%E9%80%89%E5%9E%8B/"></a></div>
             <div class="post-meta">
                 
-                <i class="fa fa-calendar"></i> <time>2020-09-24</time>
+                <i class="fa fa-calendar"></i> <time>2020-10-05</time>
                 <span class="dotted">|</span>
                 <i class="fa fa-user"></i> 
             </div>
 
             <div class="post-excerpt">
-                <a href="/2020/09/24/hello-world/">
+                <a href="/2020/10/05/%E5%88%86%E5%B8%83%E5%BC%8F%E9%94%81%E7%9A%84%E9%80%89%E5%9E%8B/">
                     <p>
                         
-                            Welcome to Hexo! This is your very first post. Check documentation for more info. If you get any problems when using Hexo, you can find the answer in troubleshooting or you can ask me on GitHub.
-Quick StartCreate a new post1$ hexo new &quot;My New Post&quot;
+                            分布式锁的选型基于数据库实现分布式锁实现方式参考：《基于PostgreSQL的各种锁》
+缺点：
 
-More info: Writing
-Run server1$ hexo server
+这把锁强依赖数据库的可用性，数据库是一个单点，一旦数据库挂掉，会导致业务系统不可用。
+这把锁没有失效时间，一旦解锁操作失败，就会导致锁记录一直在数据库中，其他线程无法再获得到锁。
+这把锁只能是非阻塞的，因为数据的insert操作，一旦插入失败就会直接报错。没有获得锁的线程并不会进入排队队列，要想再次获得锁就要再次触发获得锁操作。
+这把锁是非重入的，同一个线程在没有释放锁之前无法再次获得该锁。因为数据中数据已经存在了。
 
-More info: Server
-Generate static files1$ hexo generate
+上述问题解决思路：
 
-More info: Generating
-Deploy to remote sites1$ hexo deploy
+分布式主从数据库
+定时任务清理超时数据
+while循环阻塞直到成功
+在数据库表中加个字段，记录当前获得锁的机器的主机信息和线程信息，那么下次再获取锁的时候先查询数据库，如果当前机器的主机信息和线程信息在数据库可以查到的话，直接把锁分配给他就可以了。
 
-More info: Deployment
+基于缓存实现分布式锁实现方式参考：《RedissonClient集成》《环绕通知实现RedLock分布式锁》
+为何使用Redisson分布式锁：
+
+Redisson官方开源
+lettuce及jedis都只在一个节点配置分布式锁。如果节点宕机会导致无限死锁。
+Redisson使用会在所有节点存入锁。使用过半机制，如果超过一半节点释放锁就返回锁已经释放。更适合分布式集群环境
+
+redlock算法是redis作者推荐的一种分布式锁实现方式，算法的内容如下：
+​    (1) 获取当前时间；
+​    (2) 尝试从5个相互独立redis客户端获取锁；
+​    (3) 计算获取所有锁消耗的时间，当且仅当客户端从多数节点获取锁，并且获取锁的时间小于锁的有效时间，认为获得锁；
+​    (4) 重新计算有效期时间，原有效时间减去获取锁消耗的时间；
+​    (5) 删除所有实例的锁
+redlock算法相对于单节点redis锁可靠性要更高，但是实现起来条件也较为苛刻。
+​    (1) 必须部署5个节点才能让Redlock的可靠性更强。
+​    (2) 需要请求5个节点才能获取到锁，通过Future的方式，先并发向5个节点请求，再一起获得响应结果，能缩短响应时间，不过还是比单节点redis锁要耗费更多时间。
+然后由于必须获取到5个节点中的3个以上，所以可能出现获取锁冲突，即大家都获得了1-2把锁，结果谁也不能获取到锁，这个问题，redis作者借鉴了raft算法的精髓，通过冲突后在随机时间开始，可以大大降低冲突时间，但是这问题并不能很好的避免，特别是在第一次获取锁的时候，所以获取锁的时间成本增加了。
+如果5个节点有2个宕机，此时锁的可用性会极大降低，首先必须等待这两个宕机节点的结果超时才能返回，另外只有3个节点，客户端必须获取到这全部3个节点的锁才能拥有锁，难度也加大了。
+如果出现网络分区，那么可能出现客户端永远也无法获取锁的情况
+基于Zookeeper实现分布式锁zookeeper是一个为分布式应用提供一致性服务的软件，它内部是一个分层的文件系统目录树结构，规定统一个目录下只能有一个唯一文件名。
+数据模型：
+永久节点：节点创建后，不会因为会话失效而消失
+临时节点：与永久节点相反，如果客户端连接失效，则立即删除节点
+顺序节点：与上述两个节点特性类似，如果指定创建这类节点时，zk会自动在节点名后加一个数字后缀，并且是有序的。
+监视器（watcher）：
+当创建一个节点时，可以注册一个该节点的监视器，当节点状态发生改变时，watch被触发时，ZooKeeper将会向客户端发送且仅发送一条通知，因为watch只能被触发一次。
+根据zookeeper的这些特性，我们来看看如何利用这些特性来实现分布式锁：
+
+创建一个锁目录lock
+
+希望获得锁的线程A就在lock目录下，创建临时顺序节点
+
+获取锁目录下所有的子节点，然后获取比自己小的兄弟节点，如果不存在，则说明当前线程顺序号最小，获得锁
+
+线程B获取所有节点，判断自己不是最小节点，设置监听(watcher)比自己次小的节点（只关注比自己次小的节点是为了防止发生“羊群效应”）
+
+线程A处理完，删除自己的节点，线程B监听到变更事件，判断自己是最小的节点，获得锁。
+
+
+
+                        
+                    </p>
+                </a>
+            </div>
+
+            
+        </article>
+    
+
+    
+        <article class="box post post-item">
+            <div class="post-title"><a href="/2020/10/05/%E5%9F%BA%E4%BA%8EPostgreSQL%E7%9A%84%E5%90%84%E7%A7%8D%E9%94%81/"></a></div>
+            <div class="post-meta">
+                
+                <i class="fa fa-calendar"></i> <time>2020-10-05</time>
+                <span class="dotted">|</span>
+                <i class="fa fa-user"></i> 
+            </div>
+
+            <div class="post-excerpt">
+                <a href="/2020/10/05/%E5%9F%BA%E4%BA%8EPostgreSQL%E7%9A%84%E5%90%84%E7%A7%8D%E9%94%81/">
+                    <p>
+                        
+                            基于PostgreSQL的各种锁一、乐观锁乐观锁介绍：乐观锁（ Optimistic Locking ） 相对悲观锁而言，乐观锁假设认为数据一般情况下不会造成冲突，所以在数据进行提交更新的时候，才会正式对数据的冲突与否进行检测，如果发现冲突了，则让返回用户错误的信息，让用户决定如何去做。那么我们如何实现乐观锁呢，一般来说有以下2种方式：
+
+使用数据版本（Version）记录机制实现，这是乐观锁最常用的一种实现方式。何谓数据版本？即为数据增加一个版本标识，一般是通过为数据库表增加一个数字类型的 “version” 字段来实现。当读取数据时，将version字段的值一同读出，数据每更新一次，对此version值加一。当我们提交更新的时候，判断数据库表对应记录的当前版本信息与第一次取出来的version值进行比对，如果数据库表当前版本号与第一次取出来的version值相等，则予以更新，否则认为是过期数据。用下面的一张图来说明：
+如上图所示，如果更新操作顺序执行，则数据的版本（version）依次递增，不会产生冲突。但是如果发生有不同的业务操作对同一版本的数据进行修改，那么，先提交的操作（图中B）会把数据version更新为2，当A在B之后提交更新时发现数据的version已经被修改了，那么A的更新操作会失败。
+
+乐观锁定的第二种实现方式和第一种差不多，同样是在需要乐观锁控制的table中增加一个字段，名称无所谓，字段类型使用时间戳（timestamp）, 和上面的version类似，也是在更新提交的时候检查当前数据库中数据的时间戳和自己更新前取到的时间戳进行对比，如果一致则OK，否则就是版本冲突。
+
+
+乐观锁应用：二、悲观锁悲观锁介绍：与乐观锁相对应的就是悲观锁了。悲观锁就是在操作数据时，认为此操作会出现数据冲突，所以在进行每次操作时都要通过获取锁才能进行对相同数据的操作，这点跟java中的synchronized很相似，所以悲观锁需要耗费较多的时间。另外与乐观锁相对应的，悲观锁是由数据库自己实现了的，要用的时候，我们直接调用数据库的相关语句就可以了。
+说到这里，由悲观锁涉及到的另外两个锁概念就出来了，它们就是共享锁与排它锁。共享锁和排它锁是悲观锁的不同的实现，它俩都属于悲观锁的范畴。
+悲观锁应用：三、共享锁共享锁介绍：
+又称为读锁，获得共享锁之后，可以查看但无法修改和删除数据。
+
+我们对数据进行读取操作的时候，其实是不会改变数据的值的。所以我们可以给数据库增加读锁，获得读锁的事务就可以读取数据了。当数据库已经被别人增加了读锁的时候，其他新来的事务也可以读数据，但是不能写。也就是说，如果事务T对数据A加上共享锁后，则其他事务只能对A再加共享锁，不能加排他锁。获准共享锁的事务只能读数据，不能修改数据。
+
+
+共享锁应用：在查询语句后面增加LOCK IN SHARE MODE，Mysql会对查询结果中的每行都加共享锁。
+1SELECT ... LOCK IN SHARE MODE;
+
+当没有其他线程对查询结果集中的任何一行使用排他锁时，可以成功申请共享锁，否则会被阻塞。其他线程也可以读取使用了共享锁的表，而且这些线程读取的是同一个版本的数据。
+四、排他锁排他锁介绍：
+又称为写锁、独占锁，获得排他锁之后，既能读数据，又能修改数据。
+我们对数据进行写操作的时候，要先获得写锁，获得写锁的事务既可以写数据也可以读数据。但是，如果数据库已经被别人增加了排他写锁，那么后面的事务是无法在获得该数据库的任何锁的。也就是说，如果事务T对数据A加上排他锁后，则其他事务不能再对A加任何类型的封锁。获准排他锁的事务既能读数据，又能修改数据。
+
+排他锁应用：在查询语句后面增加FOR UPDATE，Mysql会对查询结果中的每行都加排他锁
+1SELECT ... FOR UPDATE;
+
+当没有其他线程对查询结果集中的任何一行使用排他锁时，可以成功申请排他锁，否则会被阻塞。
+五、行级锁行级锁介绍：行级锁应用：六、表级锁表级锁介绍：
+ACCESS SHARE
+只与 ACCESS EXCLUSIVE 冲突。SELECT 和 ANALYZE 命令在被引用的表上请求一个这种锁。 通常，任何只读取表而不修改它的命令都请求这种锁模式。
+
+ROW SHARE
+与EXCLUSIVE和ACCESS EXCLUSIVE模式冲突。SELECT FOR UPDATE 和 SELECT FOR SHARE 命令在目标表上需要一个这样模式的锁（加上在所有被引用但没有 FOR UPDATE/FOR SHARE 的表上的 ACCESS SHARE 锁）。
+
+ROW EXCLUSIVE
+与 SHARE，SHARE ROW EXCLUSIVE， EXCLUSIVE 和 ACCESS EXCLUSIVE 模式冲突。命令 UPDATE，DELETE， 和 INSERT 自动请求这个锁模式。 （加上所有其它被引用的表上的 ACCESS SHARE 锁）。 通常，这种锁将被任何修改表中数据的查询请求。
+
+SHARE UPDATE EXCLUSIVE
+和 SHARE UPDATE EXCLUSIVE，SHARE， SHARE ROW EXCLUSIVE，EXCLUSIVE， 和 ACCESS EXCLUSIVE 模式冲突。 这个模式保护一个表不被并发模式改变和 VACUUM。VACUUM（不带 FULL 选项）请求这样的锁。
+
+SHARE
+与 ROW EXCLUSIVE，SHARE UPDATE EXCLUSIVE， SHARE ROW EXCLUSIVE，EXCLUSIVE 和 ACCESS EXCLUSIVE 模式冲突。 这个模式避免表的并发数据修改。CREATE INDEX 语句要求这样的锁模式。
+
+SHARE ROW EXCLUSIVE
+与 ROW EXCLUSIVE， SHARE UPDATE EXCLUSIVE，SHARE， SHARE ROW EXCLUSIVE，EXCLUSIVE， 和 ACCESS EXCLUSIVE 模式冲突。任何 PostgreSQL 命令都不会自动请求这样的锁模式。
+
+EXCLUSIVE
+与 ROW SHARE，ROW EXCLUSIVE， SHARE UPDATE EXCLUSIVE， SHARE，SHARE ROW EXCLUSIVE， EXCLUSIVE 和 ACCESS EXCLUSIVE 模式冲突。 这个模式只允许并发 ACCESS SHARE 锁，也就是说， 只有对表的读动作可以和持有这个锁模式的事务并行执行。任何 PostgreSQL 命令都不会在用户表上自动请求这样的锁模式． 不过，在有些操作的时候，会在某些系统表上请求它。
+
+ACCESS EXCLUSIVE
+与所有模式冲突。 （ ACCESS SHARE, ROW SHARE, ROW EXCLUSIVE, SHARE UPDATE EXCLUSIVE, SHARE, SHARE ROW EXCLUSIVE, EXCLUSIVE, 和 ACCESS EXCLUSIVE). 这个模式保证其所有者（事务）是可以用任意方式访问该表的唯一事务。ALTER TABLE， DROP TABLE，REINDEX，CLUSTER和 VACUUM FULL 命令要求这样的锁。 在 LOCK TABLE 命令没有明确声明需要的锁模式时，它也是缺省锁模式。
+
+
+
+提示: 只有 ACCESS EXCLUSIVE 阻塞 SELECT （没有 FOR UPDATE/FOR SHARE语句）。
+
+表级锁应用：
+
+                        
+                    </p>
+                </a>
+            </div>
+
+            
+        </article>
+    
+
+    
+        <article class="box post post-item">
+            <div class="post-title"><a href="/2020/10/05/%E7%8E%AF%E7%BB%95%E9%80%9A%E7%9F%A5%E5%AE%9E%E7%8E%B0RedLock%E5%88%86%E5%B8%83%E5%BC%8F%E9%94%81/"></a></div>
+            <div class="post-meta">
+                
+                <i class="fa fa-calendar"></i> <time>2020-10-05</time>
+                <span class="dotted">|</span>
+                <i class="fa fa-user"></i> 
+            </div>
+
+            <div class="post-excerpt">
+                <a href="/2020/10/05/%E7%8E%AF%E7%BB%95%E9%80%9A%E7%9F%A5%E5%AE%9E%E7%8E%B0RedLock%E5%88%86%E5%B8%83%E5%BC%8F%E9%94%81/">
+                    <p>
+                        
+                            环绕通知实现RedLock分布式锁一、Coding自定义注解123456789101112131415161718192021222324252627282930313233343536373839404142import java.lang.annotation.*;import java.util.concurrent.TimeUnit;/** * 分布式锁注解 * * 使用该锁时，对该方法执行加锁操作。 * 如果和@cacheable配合使用。 * 如果没有执行方法，不会执行加锁操作 * */@Target(&#123;ElementType.METHOD&#125;)@Retention(RetentionPolicy.RUNTIME)@Documented@Inheritedpublic @interface Rlock &#123;    /**     * 分布式锁的key     */    String localKey();    /**     * 锁的等待时间     * @return     */    long waitTime() default 1000;    /**     * 强制解锁释放时间 默认五秒     *     * @return     */    long leaseTime() default 5*1000;    /**     * 时间格式 默认：毫秒     *     * @return     */    TimeUnit timeUnit() default TimeUnit.MILLISECONDS;&#125;
+
+
+
+二、使用AOP环绕通知来执行加锁解锁12345678910111213141516171819202122232425262728293031323334353637383940414243444546474849505152535455565758596061626364656667686970717273747576777879808182import org.aspectj.lang.ProceedingJoinPoint;import org.aspectj.lang.annotation.Around;import org.aspectj.lang.annotation.Aspect;import org.aspectj.lang.annotation.Pointcut;import org.aspectj.lang.reflect.MethodSignature;import org.redisson.RedissonRedLock;import org.redisson.api.RLock;import org.redisson.api.RedissonClient;import org.slf4j.Logger;import org.slf4j.LoggerFactory;import org.springframework.beans.factory.annotation.Autowired;import org.springframework.stereotype.Component;/** * @program: microservice_tmgsp * @description: RLock的AOP配置 * @author: miaoyumeng * @create: 2019-08-30 09:32 */@Aspect@Componentpublic class RlockAspect &#123;    private final static Logger logger = LoggerFactory.getLogger(RlockAspect.class);    @Autowired    private RedissonClient redissonClient;    @Pointcut(&quot;@annotation(cn.com.sinosoft.ecc.sms.component.redisson.Rlock)&quot;)    public void RlockAspect() &#123;    &#125;    @Around(&quot;RlockAspect()&quot;)    public Object arround(ProceedingJoinPoint proceedingJoinPoint) throws Throwable &#123;        Object object = null;        RLock lock = null;        Rlock rlockInfo = getRlockInfo(proceedingJoinPoint);        logger.info(&quot;lockinfo：&quot; + rlockInfo);        lock = redissonClient.getLock(getLocalKey(proceedingJoinPoint, rlockInfo));        RedissonRedLock redLock = new RedissonRedLock(lock);        logger.info(&quot;rlockAspect start &quot;);        try &#123;            if (lock != null) &#123;                boolean status = redLock.tryLock(rlockInfo.waitTime(),rlockInfo.leaseTime(), rlockInfo.timeUnit());                if (status) &#123;                    logger.info(&quot;Redisson Lock：&quot;+status);                    object = proceedingJoinPoint.proceed();                &#125;            &#125;        &#125; catch (Exception e) &#123;            logger.error(&quot;get RedissonLock faild error :&quot; + e);       &#125; finally &#123;            if (lock != null) &#123;                redLock.unlock();            &#125;        &#125;        return object;    &#125;    public Rlock getRlockInfo(ProceedingJoinPoint proceedingJoinPoint) &#123;        MethodSignature methodSignature = (MethodSignature) proceedingJoinPoint.getSignature();        return methodSignature.getMethod().getAnnotation(Rlock.class);    &#125;    /**     * redis lock key 生成逻辑  这里只是简单生成，如需投入生产使用，可考虑复杂化     *     * @param proceedingJoinPoint     * @return     */    public String getLocalKey(ProceedingJoinPoint proceedingJoinPoint, Rlock rlockInfo) &#123;        StringBuilder localKey = new StringBuilder(&quot;Rlock_&quot;);//        final Object[] args = proceedingJoinPoint.getArgs();//        MethodSignature methodSignature = (MethodSignature) proceedingJoinPoint.getSignature();//        String methodName = methodSignature.getMethod().getName();//        localKey.append(rlockInfo.localKey()).append(methodName);        localKey.append(rlockInfo.localKey());        logger.info(&quot;produce redisson lock key=&quot; + localKey.toString());        return localKey.toString();    &#125;&#125;
+
+
+
+三、使用方式1234@Rlock(localKey = &quot;SMS_ShortMessageTemplateConfigServiceImpl_ADD_KEY&quot;, leaseTime = 1, timeUnit = TimeUnit.MINUTES)public boolean add(ShortMessageTemplateConfig shortMessageTemplateConfig) &#123;    //业务逻辑&#125;
+
 
                         
                     </p>
@@ -130,7 +287,15 @@ More info: Deployment
     <ul class="item-box">
         
             
-                <li><a href="/2020/09/24/hello-world/">Hello World</a></li>
+                <li><a href="/2020/10/05/%E5%88%86%E5%B8%83%E5%BC%8F%E9%94%81%E7%9A%84%E9%80%89%E5%9E%8B/">(no title)</a></li>
+            
+        
+            
+                <li><a href="/2020/10/05/%E5%9F%BA%E4%BA%8EPostgreSQL%E7%9A%84%E5%90%84%E7%A7%8D%E9%94%81/">(no title)</a></li>
+            
+        
+            
+                <li><a href="/2020/10/05/%E7%8E%AF%E7%BB%95%E9%80%9A%E7%9F%A5%E5%AE%9E%E7%8E%B0RedLock%E5%88%86%E5%B8%83%E5%BC%8F%E9%94%81/">(no title)</a></li>
             
         
     </ul>
@@ -142,7 +307,7 @@ More info: Deployment
         
   <div class="box widget">
     <div class="title">Archives</div>
-    <ul class="archive-list"><li class="archive-list-item"><a class="archive-list-link" href="/archives/2020/09/">2020-09</a><span class="archive-list-count">1</span></li></ul>
+    <ul class="archive-list"><li class="archive-list-item"><a class="archive-list-link" href="/archives/2020/10/">2020-10</a><span class="archive-list-count">3</span></li></ul>
   </div>
 
     

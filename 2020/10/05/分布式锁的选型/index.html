@@ -1,0 +1,213 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta http-equiv="content-type" content="text/html; charset=utf-8">
+<meta content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=0" name="viewport">
+<meta http-equiv="X-UA-Compatible" content="IE=Edge,chrome=1">
+
+
+
+
+    <meta name="keywords" content=""/>
+
+
+
+    <meta name="description" content="分布式锁的选型基于数据库实现分布式锁实现方式参考：《基于PostgreSQL的各种锁》
+缺点：
+
+这把锁强依赖数据库的可用性，数据库是一个单点，一旦数据库挂掉，会导致业务系统不可用。
+这把锁没有失效时间，一旦解锁操作失败，就会导致锁记录一直在数据库中，其他线程无法再获得到锁。
+这把锁只能是非阻..."/>
+
+
+<meta name="Robots" content="all">
+
+
+    <title>Hexo</title>
+
+
+<link rel="icon" href="/images/favicon.ico">
+
+<link rel="stylesheet" href="/css/font-awesome.min.css">
+
+
+<link rel="stylesheet" href="/css/atom-one-dark.css">
+
+
+<link rel="stylesheet" href="/css/style.css">
+
+
+<script src="/js/highlight.min.js"></script>
+
+<meta name="generator" content="Hexo 5.2.0"></head>
+<body>
+    <div class="main-container">
+        <header class="header">
+    <div class="global-width">
+        <nav class="nav-box">
+            
+                <a class="nav-item" href="/"
+                
+                >Home</a>
+            
+                <a class="nav-item" href="/resume"
+                
+                >Resume</a>
+            
+                <a class="nav-item" href="/mood"
+                
+                   target="_blank"
+                
+                >Mood</a>
+            
+                <a class="nav-item" href="/amusement/tetris"
+                
+                   target="_blank"
+                
+                >Amusement</a>
+            
+                <a class="nav-item" href="/about"
+                
+                >About</a>
+            
+        </nav>
+    </div>
+</header>
+
+        <section class="content global-width">
+            <div class="main">
+                <article class="box post">
+    <div class="post-title align-center detail-title"></div>
+    <div class="post-meta align-center">
+        
+        <i class="fa fa-calendar"></i> <time>2020-10-05</time>
+        <span class="dotted">|</span>
+        <i class="fa fa-user"></i> 
+        
+    </div>
+
+    <div class="post-content">
+        <h1 id="分布式锁的选型"><a href="#分布式锁的选型" class="headerlink" title="分布式锁的选型"></a>分布式锁的选型</h1><h2 id="基于数据库实现分布式锁"><a href="#基于数据库实现分布式锁" class="headerlink" title="基于数据库实现分布式锁"></a>基于数据库实现分布式锁</h2><p>实现方式参考：《基于PostgreSQL的各种锁》</p>
+<p>缺点：</p>
+<ul>
+<li>这把锁强依赖数据库的可用性，数据库是一个单点，一旦数据库挂掉，会导致业务系统不可用。</li>
+<li>这把锁没有失效时间，一旦解锁操作失败，就会导致锁记录一直在数据库中，其他线程无法再获得到锁。</li>
+<li>这把锁只能是非阻塞的，因为数据的insert操作，一旦插入失败就会直接报错。没有获得锁的线程并不会进入排队队列，要想再次获得锁就要再次触发获得锁操作。</li>
+<li>这把锁是非重入的，同一个线程在没有释放锁之前无法再次获得该锁。因为数据中数据已经存在了。</li>
+</ul>
+<p>上述问题解决思路：</p>
+<ul>
+<li>分布式主从数据库</li>
+<li>定时任务清理超时数据</li>
+<li>while循环阻塞直到成功</li>
+<li>在数据库表中加个字段，记录当前获得锁的机器的主机信息和线程信息，那么下次再获取锁的时候先查询数据库，如果当前机器的主机信息和线程信息在数据库可以查到的话，直接把锁分配给他就可以了。</li>
+</ul>
+<h2 id="基于缓存实现分布式锁"><a href="#基于缓存实现分布式锁" class="headerlink" title="基于缓存实现分布式锁"></a>基于缓存实现分布式锁</h2><p>实现方式参考：《RedissonClient集成》《环绕通知实现RedLock分布式锁》</p>
+<p><strong>为何使用Redisson分布式锁：</strong></p>
+<ul>
+<li>Redisson官方开源</li>
+<li>lettuce及jedis都只在一个节点配置分布式锁。如果节点宕机会导致无限死锁。</li>
+<li>Redisson使用会在所有节点存入锁。使用过半机制，如果超过一半节点释放锁就返回锁已经释放。更适合分布式集群环境</li>
+</ul>
+<p>redlock算法是redis作者推荐的一种分布式锁实现方式，算法的内容如下：</p>
+<p>​    (1) 获取当前时间；</p>
+<p>​    (2) 尝试从5个相互独立redis客户端获取锁；</p>
+<p>​    (3) 计算获取所有锁消耗的时间，当且仅当客户端从多数节点获取锁，并且获取锁的时间小于锁的有效时间，认为获得锁；</p>
+<p>​    (4) 重新计算有效期时间，原有效时间减去获取锁消耗的时间；</p>
+<p>​    (5) 删除所有实例的锁</p>
+<p>redlock算法相对于单节点redis锁可靠性要更高，但是实现起来条件也较为苛刻。</p>
+<p>​    (1) 必须部署5个节点才能让Redlock的可靠性更强。</p>
+<p>​    (2) 需要请求5个节点才能获取到锁，通过Future的方式，先并发向5个节点请求，再一起获得响应结果，能缩短响应时间，不过还是比单节点redis锁要耗费更多时间。</p>
+<p>然后由于必须获取到5个节点中的3个以上，所以可能出现获取锁冲突，即大家都获得了1-2把锁，结果谁也不能获取到锁，这个问题，redis作者借鉴了raft算法的精髓，通过冲突后在随机时间开始，可以大大降低冲突时间，但是这问题并不能很好的避免，特别是在第一次获取锁的时候，所以获取锁的时间成本增加了。</p>
+<p>如果5个节点有2个宕机，此时锁的可用性会极大降低，首先必须等待这两个宕机节点的结果超时才能返回，另外只有3个节点，客户端必须获取到这全部3个节点的锁才能拥有锁，难度也加大了。</p>
+<p>如果出现网络分区，那么可能出现客户端永远也无法获取锁的情况</p>
+<h2 id="基于Zookeeper实现分布式锁"><a href="#基于Zookeeper实现分布式锁" class="headerlink" title="基于Zookeeper实现分布式锁"></a>基于Zookeeper实现分布式锁</h2><p>zookeeper是一个为分布式应用提供一致性服务的软件，它内部是一个分层的文件系统目录树结构，规定统一个目录下只能有一个唯一文件名。</p>
+<p>数据模型：</p>
+<p>永久节点：节点创建后，不会因为会话失效而消失</p>
+<p>临时节点：与永久节点相反，如果客户端连接失效，则立即删除节点</p>
+<p>顺序节点：与上述两个节点特性类似，如果指定创建这类节点时，zk会自动在节点名后加一个数字后缀，并且是有序的。</p>
+<p>监视器（watcher）：</p>
+<p>当创建一个节点时，可以注册一个该节点的监视器，当节点状态发生改变时，watch被触发时，ZooKeeper将会向客户端发送且仅发送一条通知，因为watch只能被触发一次。</p>
+<p>根据zookeeper的这些特性，我们来看看如何利用这些特性来实现分布式锁：</p>
+<ol>
+<li><p>创建一个锁目录lock</p>
+</li>
+<li><p>希望获得锁的线程A就在lock目录下，创建临时顺序节点</p>
+</li>
+<li><p>获取锁目录下所有的子节点，然后获取比自己小的兄弟节点，如果不存在，则说明当前线程顺序号最小，获得锁</p>
+</li>
+<li><p>线程B获取所有节点，判断自己不是最小节点，设置监听(watcher)比自己次小的节点（只关注比自己次小的节点是为了防止发生“羊群效应”）</p>
+</li>
+<li><p>线程A处理完，删除自己的节点，线程B监听到变更事件，判断自己是最小的节点，获得锁。</p>
+</li>
+</ol>
+
+    </div>
+</article>
+            </div>
+            <div class="aside">
+    
+        <div class="box widget">
+    <div class="introduction">
+        <p><img src="/images/avatar.jpg" alt="head-sculpture" /></p>
+        <p class="name">
+            万能的苗
+        </p>
+        <p class="slogan">勇敢开始，不恋过往，        不困于今，不畏将来。</p>
+    </div>
+</div>
+    
+        
+<div class="box widget">
+    <div class="title">Recent</div>
+    <ul class="item-box">
+        
+            
+                <li><a href="/2020/10/05/%E5%88%86%E5%B8%83%E5%BC%8F%E9%94%81%E7%9A%84%E9%80%89%E5%9E%8B/">(no title)</a></li>
+            
+        
+            
+                <li><a href="/2020/10/05/%E5%9F%BA%E4%BA%8EPostgreSQL%E7%9A%84%E5%90%84%E7%A7%8D%E9%94%81/">(no title)</a></li>
+            
+        
+            
+                <li><a href="/2020/10/05/%E7%8E%AF%E7%BB%95%E9%80%9A%E7%9F%A5%E5%AE%9E%E7%8E%B0RedLock%E5%88%86%E5%B8%83%E5%BC%8F%E9%94%81/">(no title)</a></li>
+            
+        
+    </ul>
+</div>
+
+    
+        
+    
+        
+  <div class="box widget">
+    <div class="title">Archives</div>
+    <ul class="archive-list"><li class="archive-list-item"><a class="archive-list-link" href="/archives/2020/10/">2020-10</a><span class="archive-list-count">3</span></li></ul>
+  </div>
+
+    
+        
+    
+</div>
+        </section>
+        <footer class="footer">
+    <div class="global-width footer-box">
+        <div class="copyright">
+            <span>Copyright &copy; 2019</span>
+            <span class="dotted">|</span>
+            <span>Powered by <a target="_blank" rel="noopener" href="https://hexo.io/">Hexo</a></span>
+            <span class="dotted">|</span>
+            <span>Theme by <a href="javascript:">Loren</a></span>
+            <span class="dotted">|</span>
+            <span><a target="_blank" rel="noopener" href="http://www.beian.miit.gov.cn">浙ICP备18016660号-1</a></span>
+        </div>
+    </div>
+</footer>
+    </div>
+
+<script>
+    hljs.initHighlightingOnLoad();
+</script>
+</body>
+</html>
